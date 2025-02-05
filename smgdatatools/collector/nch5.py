@@ -50,6 +50,15 @@ class NcH5Collector(Collector):
                     store_id=store.id)
                 store.attrs.append(attribute)
 
+        # drs
+        drs = self.parse_drs(resource)
+        for facet in drs:
+            global_attribute = GlobalAttribute(
+                name=facet,
+                value=drs[facet],
+                store_id=store.id)
+            store.attrs.append(global_attribute)
+
         for v in list(f):
             variable = Variable(
                 name=v,
