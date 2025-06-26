@@ -27,5 +27,6 @@ setup(name='smgdatatools',
       scripts=[
           'smgdatatools/esgfsearch.py',
           'smgdatatools/etl.py',
+          'smgdatatools/ncrcat.py',
           'smgdatatools/catalog.py'],
 )
