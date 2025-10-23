@@ -90,6 +90,8 @@ def range_search(endpoint, session, query, stop=None):
 def standard_search(query, stop, index):
     s = requests.Session()
     endpoint = "https://{}/esg-search/search".format(index)
+    if index == "esgf-ui.ceda.ac.uk":
+        endpoint = "https://{}/proxy/search".format(index)
     for result in range_search(endpoint, s, query, stop):
         yield result
     s.close()
@@ -322,7 +324,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--index-node",
                         type=str,
                         nargs="?",
-                        default="esgf-node.llnl.gov",
+                        default="esgf-ui.ceda.ac.uk",
                         help="domain of the index node to query.")
     parser.add_argument("-q", "--query",
                         type=str,
