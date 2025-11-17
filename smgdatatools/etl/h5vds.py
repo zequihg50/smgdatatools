@@ -289,21 +289,25 @@ class Common(Etl):
                     i = to
 
         # virtual variables
-        for v in proto_store.variables:
-            if v.name in f:
-                # ToDo: warning
-                continue
+        for aggregation in aggregations:
+            subset = [v.store
+                      for s in sorted(stores, key=lambda x: x.name)
+                      for v in s.variables if v.name == aggregation]
+            for v in subset[0].variables:
+                if v.name in f:
+                    # ToDo: warning
+                    continue
 
-            if v.name not in aggregations and v.name != proto_agg_var.name:
-                attrs = {attr.name: attr.value for attr in v.attrs}
-                if "CLASS" in attrs and attrs["CLASS"] == "DIMENSION_SCALE":
-                    if attrs["NAME"].startswith(NOT_A_VAR):
-                        create_dimension(f, v.name, v.dimensions[0].size)
+                if v.name not in aggregations and v.name != proto_agg_var.name:
+                    attrs = {attr.name: attr.value for attr in v.attrs}
+                    if "CLASS" in attrs and attrs["CLASS"] == "DIMENSION_SCALE":
+                        if attrs["NAME"].startswith(NOT_A_VAR):
+                            create_dimension(f, v.name, v.dimensions[0].size)
+                        else:
+                            create_virtual_variable(f, v)
+                            f[v.name].make_scale(v.name)
                     else:
                         create_virtual_variable(f, v)
-                        f[v.name].make_scale(v.name)
-                else:
-                    create_virtual_variable(f, v)
 
         for aggregation in aggregations:
             subset = [v.store
