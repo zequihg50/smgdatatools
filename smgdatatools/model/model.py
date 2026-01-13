@@ -75,7 +75,6 @@ class Filter(Base):
     __tablename__ = "filter"
 
     id = Column("id", Integer, primary_key=True)
-    name = Column("name", String(100))
 
     variable_id = Column(Integer, ForeignKey("variable.id"))
     variable = relationship("Variable", back_populates="filters")
@@ -84,7 +83,6 @@ class Filter(Base):
 
     def __repr__(self):
         return f"Filter(id={self.id!r}, " \
-               f"name={self.name!r}, " \
                f"variable_id={self.variable_id!r})"
 
 
@@ -109,13 +107,11 @@ class Compressor(Base):
     __tablename__ = "compressor"
 
     id = Column("id", Integer, primary_key=True)
-    name = Column("name", String(100))
 
     properties = relationship("CompressorProperty")
 
     def __repr__(self):
-        return f"Compressor(id={self.id!r}, " \
-               f"name={self.name!r})"
+        return f"Compressor(id={self.id!r}"
 
 
 class CompressorProperty(Base):

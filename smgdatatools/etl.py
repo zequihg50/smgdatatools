@@ -1,16 +1,18 @@
 #!/usr/bin/env python
 
 import argparse
+import asyncio
+import copy
 import logging
 import os
 import sys
-from multiprocessing import Pool
 
 from sqlalchemy import select, create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import QueuePool
 
 from smgdatatools.collector.h5 import Hdf5ChunkCollector
+from smgdatatools.collector.nch5 import NcH5Collector
 from smgdatatools.collector.nc import NcCollector
 from smgdatatools.collector.zarr import ZarrCollector
 from smgdatatools.etl.h5vds import Common, Union, NewCommon, New
@@ -40,6 +42,36 @@ def parse_coord_values_attr(coord_values_attr_spec, stores):
                     values.add(attr.value)
 
     return list(values)
+
+
+def sync_collect(f, collector):
+    store = None
+    try:
+        store = collector.collect(f)
+        return collector.collect(f)
+    except:
+        print("Error on store {}".format(store), file=sys.stderr)
+        raise
+
+
+async def collect(file, collector):
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(None, sync_collect, file, collector)
+    return data
+
+
+async def collect_all(stores, collector):
+    tasks = []
+
+    for store in stores:
+        # Start reading file asynchronously
+        task = asyncio.create_task(collect(store, collector))
+        tasks.append(task)
+
+    # Wait for all file reading tasks to complete
+    results = await asyncio.gather(*tasks)
+
+    return results
 
 
 if __name__ == "__main__":
@@ -92,10 +124,14 @@ if __name__ == "__main__":
                         required=False,
                         help="ETL to perform.")
     parser.add_argument("--collector",
-                        choices=["nc", "zarr", "hdf5chunk"],
+                        choices=["nc", "zarr", "hdf5chunk", "nch5"],
                         required=True,
                         type=str,
                         help="collector.")
+    parser.add_argument("--batch-size",
+                        default=100,
+                        type=int,
+                        help="number of stores to harvest before commit to db.")
     parser.add_argument("--aggregations",
                         type=str,
                         nargs="*",
@@ -165,6 +201,14 @@ if __name__ == "__main__":
         # raise ValueError("--db or --from-db must be used.")
         db_url = "sqlite+pysqlite:///:memory:"
 
+    engine = create_engine(
+        db_url,
+        echo=False,
+        future=True,
+        poolclass=QueuePool,
+        pool_size=args["jobs"])
+    Base.metadata.create_all(engine)
+
     # set up collector
     if args["collector"] == "hdf5chunk":
         collector = Hdf5ChunkCollector(
@@ -174,36 +218,35 @@ if __name__ == "__main__":
     elif args["collector"] == "nc":
         collector = NcCollector(
             drs=args["drs"])
+    elif args["collector"] == "nch5":
+        collector = NcH5Collector(
+            drs=args["drs"],
+            driver=args["hdf5_driver"])
     elif args["collector"] == "zarr":
         collector = ZarrCollector(
             drs=args["drs"])
     else:
         raise ValueError("Invalid collector.")
 
-    engine = create_engine(
-        db_url,
-        echo=False,
-        future=True,
-        poolclass=QueuePool,
-        pool_size=args["jobs"])
-    Base.metadata.create_all(engine)
-    session = Session(engine)
-
     if not args["from_db"]:
         if args["from"] == "-":
-            inputs = (line.rstrip("\n") for line in sys.stdin)
+            inputs = list(line.rstrip("\n") for line in sys.stdin)
         else:
-            inputs = (line.rstrip("\n") for line in open(args["from"], "r"))
+            inputs = list(line.rstrip("\n") for line in open(args["from"], "r"))
 
-        with Pool(args["jobs"]) as pool:
-            for store in pool.map(collector.collect, inputs):
+        for i in range(0, len(inputs), args["batch_size"]):
+            print("batch: {}".format(i), file=sys.stderr)
+            session = Session(engine)
+            stores = asyncio.run(collect_all(inputs[i:i+args["batch_size"]], collector))
+            for store in stores:
                 session.add(store)
-
-        session.commit()
+            session.commit()
+            session.close()
 
     # perform ETL
     if args["etl"]:
         # set up engine
+        session = Session(engine)
         stores = session.query(Store).all()
 
         # set up ETL

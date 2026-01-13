@@ -31,12 +31,12 @@
   </service>
 
   {% for dataset in datasets %}
-  <dataset name="{{ dataset.path|basename|regex_replace('\.[^.]+', '') }}"
-           ID="{{ namespace }}/{{ dataset.drs['drs']|regex_replace('\.[^.]+', '') }}"
+  <dataset name="{{ dataset.path|basename|regex_replace('\.[^.]+$', '') }}"
+           ID="{{ namespace }}/{{ dataset.drs['drs']|regex_replace('\.[^.]+$', '') }}"
            {% if restrict %}
            restrictAccess="{{ restrict }}"
            {% endif %}
-           urlPath="{{ namespace }}/{{ dataset.drs['drs']|regex_replace('\.[^.]+', '') }}">
+           urlPath="{{ namespace }}/{{ dataset.drs['drs']|regex_replace('\.[^.]+$', '') }}">
     <metadata inherited="true">
       <serviceName>virtual</serviceName>
       <dataSize units="bytes">{{ dataset.attrs["size"] }}</dataSize>

@@ -1,0 +1,72 @@
+{% set sub_experiment_facet = subexperiment|default("subexperiment") %}
+{% set sub_experiments = stores|map("attr", "attrs")|sum(start=[])|selectattr("name", "eq", sub_experiment_facet)|map("attr", "value")|unique|sort %}
+{% set ensemble_facet = ensemble|default("variant_label") %}
+{% set ensembles = stores|map("attr", "attrs")|sum(start=[])|selectattr("name", "eq", ensemble_facet)|map("attr", "value")|unique|sort %}
+{% set prototype = aggregations|first %}
+{% set time_dim_name = stores|map("attr", "variables")|sum(start=[])|selectattr("name", "eq", prototype)|first|attr("dimensions")|selectattr("index", "eq", 0)|first|attr("scales")|first|attr('name') %}
+{% set time_prototype_attrs = stores|first|attr("variables")|selectattr("name", "eq", time_dim_name)|first|attr("attrs")|attrs_dict %}
+<?xml version="1.0" encoding="UTF-8"?>
+<netcdf xmlns="http://www.unidata.ucar.edu/namespaces/netcdf/ncml-2.2">
+    <attribute name="size" type="int" value="{{ stores|map('attr', 'size')|sum|int }}"/>
+    <attribute name="size_human" value="{{ stores|map('attr', 'size')|sum|filesizeformat(binary=True) }}"/>
+
+    <variable name="{{ time_dim_name }}">
+        <attribute name="_CoordinateAxisType" value="Time"/>
+    </variable>
+
+    <variable name="runtime" type="string" shape="run" orgName="run">
+    	<attribute name="long_name" value="Run time for model"/>
+    	<attribute name="standard_name" value="forecast_reference_time"/>
+    	<attribute name="_CoordinateAxisType" value="Runtime"/>
+    </variable>
+
+    <variable name="{{ ensemble_facet }}" shape="{{ ensemble_facet }}" type="string">
+        <attribute name="standard_name" value="realization"/>
+        <attribute name="_CoordinateAxisType" value="Ensemble"/>
+    </variable>
+
+    <aggregation type="joinNew" dimName="{{ ensemble_facet }}">
+        {% for a in aggregations %}
+        <variableAgg name="{{ a }}"/>
+        {% endfor %}
+        {% for ensemble in ensembles %}
+        <netcdf coordValue="{{ ensemble }}">
+	    <aggregation type="joinNew" dimName="run">
+		<variableAgg name="{{ time_dim_name }}"/>
+                {% for a in aggregations %}
+                <variableAgg name="{{ a }}"/>
+                {% endfor %}
+		{% for sub_experiment in sub_experiments %}
+                {% set subset_sub_experiments = stores|map("attr", "attrs")|sum(start=[])|selectattr("name", "eq", sub_experiment_facet)|selectattr("value", "eq", sub_experiment)|map("attr", "store")|sort(attribute="name")|unique|list %}
+		<netcdf coordValue="{{ sub_experiment }}-01-01T00:00:00Z">
+                    <aggregation type="union">
+                        {% for a in aggregations %}
+                        {% set subset = subset_sub_experiments|map("attr", "attrs")|sum(start=[])|selectattr("name", "eq", ensemble_facet)|selectattr("value", "eq", ensemble)|map("attr", "store")|map("attr", "variables")|sum(start=[])|selectattr("name", "eq", a)|map("attr", "store")|sort(attribute="name")|unique|list %}
+                        {% if subset|length > 0 %}
+                        <netcdf>
+                            <aggregation type="joinExisting" dimName="{{ time_dim_name }}">
+                                {% for store in subset %}
+                                {% set time = store.variables|selectattr("name", "eq", time_dim_name)|first %}
+                                {% set time_attrs = time.attrs|attrs_dict %}
+                                <netcdf location="{{ store.name }}" ncoords="{{ store.variables|selectattr('name', 'eq', time_dim_name)|first|attr('dimensions')|selectattr('index', 'eq', 0)|first|attr('size') }}">
+                                    {% if time_attrs["units"] != time_prototype_attrs["units"] or time_attrs["calendar"] != time_prototype_attrs["calendar"] %}
+                                    <variable name="{{ time.name }}">
+                                        <attribute name="units" value="{{ time_prototype_attrs['units'] }}"/>
+                                        <attribute name="calendar" value="{{ time_prototype_attrs['calendar'] }}"/>
+                                        <values>{{ collector.read_variable(store.name, time_dim_name)|convert_times(time_attrs["units"], time_attrs["calendar"], time_prototype_attrs["units"], time_prototype_attrs["calendar"])|list|map("string")|join(" ") }}</values>
+                                    </variable>
+                                    {% endif %}
+                                </netcdf>
+                            {% endfor %}
+                            </aggregation>
+		        </netcdf>
+                        {% endif %}
+                        {% endfor %}
+                    </aggregation>
+                </netcdf>
+		{% endfor %}
+            </aggregation>
+        </netcdf>
+        {% endfor %}
+    </aggregation>
+</netcdf>

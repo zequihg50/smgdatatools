@@ -2,12 +2,15 @@ import base64
 import importlib
 import os
 import re
+from collections.abc import Iterable
 
+import numpy as np
 import pkg_resources
 from jinja2 import ChoiceLoader, FileSystemLoader, Environment, select_autoescape
-from smgdatatools.model.model import Variable
 
 from smgdatatools.etl.lib import Etl, convert_times, join_existing, calculate_chunk_idx, to_numpy
+from smgdatatools.model.model import Variable
+
 
 # Filters and tests
 def is_dimension(variable: Variable):
@@ -19,6 +22,34 @@ def is_dimension(variable: Variable):
             break
 
     return dim
+
+
+def return_correct_attribute(name, value):
+    if isinstance(value, bytes):
+        return "\\\"{}\\\"".format(value.decode("utf-8").replace("\"", ""))
+    elif isinstance(value, str):
+        try:
+            numeric_value = int(value)
+            return return_correct_attribute(name, numeric_value)
+        except ValueError:
+            pass
+
+        try:
+            numeric_value = float(value)
+            return return_correct_attribute(name, numeric_value)
+        except ValueError:
+            pass
+
+        return "\\\"{}\\\"".format(value.replace("\"", ""))
+    elif isinstance(value, int) or isinstance(value, float):
+        return value
+    elif isinstance(value, Iterable):
+        return return_correct_attribute(name, value[0])
+    elif isinstance(value, np.number):
+        return value
+    else:
+        raise ValueError("Unexpected type for attribute {}: {}".format(name, type(value)))
+
 
 class JinjaEtl(Etl):
     def __init__(self, template, opts):
@@ -61,8 +92,10 @@ class JinjaEtl(Etl):
 
         env.filters["regex_replace"] = lambda s, find, replace: re.sub(find, replace, s)
         env.filters["attrs_dict"] = lambda attrs: {attr.name: attr.value for attr in attrs}
-        env.filters["attrs_escape"] = lambda dict_items: {"\\\"{}\\\": \\\"{}\\\"".format(x[0], x[1].replace("\"", ""))
-                                                          for x in dict_items}
+        env.filters["attrs_escape"] = lambda dict_items: {
+            "\\\"{}\\\":{}".format(x[0], return_correct_attribute(x[0], x[1]))
+            for x in dict_items
+            if x[0] not in ["REFERENCE_LIST", "DIMENSION_LIST"]}
         env.filters["join_existing"] = join_existing
         env.filters["calculate_chunk_idx"] = calculate_chunk_idx
         env.filters["convert_times"] = convert_times

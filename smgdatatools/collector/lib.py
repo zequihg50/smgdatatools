@@ -26,11 +26,11 @@ class Collector:
     def ignored_attrs(self):
         return (
             "REFERENCE_LIST",
-            #"CLASS",
+            # "CLASS",
             "DIMENSION_LIST",
-            #"NAME",
-            #"_Netcdf4Dimid",
-            #"_Netcdf4Coordinates",
-            #"_nc3_strict",
-            #"_NCProperties",
+            # "NAME",
+            # "_Netcdf4Dimid",
+            # "_Netcdf4Coordinates",
+            # "_nc3_strict",
+            # "_NCProperties",
         )

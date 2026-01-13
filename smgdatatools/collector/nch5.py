@@ -8,28 +8,11 @@ from smgdatatools.model.model import Store, Variable, Dimension, Filter, GlobalA
     ChunkShape, FilterProperty, Compressor, CompressorProperty
 
 
-class Hdf5ChunkCollector(Collector):
-    def __init__(self, drs=None, driver=None, chunk_size=None):
+class NcH5Collector(Collector):
+    def __init__(self, drs=None, driver=None):
         super().__init__(drs)
         self.driver = driver
         self.drs = drs
-        self.chunk_size = Hdf5ChunkCollector.parse_chunk_size_spec(chunk_size)
-
-    @staticmethod
-    def parse_chunk_size_spec(spec):
-        chunk_size_spec = {}
-        if spec:
-            specs = spec.split(";")
-            for s in specs:
-                tokens = s.split(":")
-                if len(tokens) == 2:
-                    chunk_size_spec[tokens[0]] = [int(x) for x in tokens[1].split(",")]
-                elif len(tokens) == 3:
-                    pass
-                else:
-                    raise ValueError("Invalid chunk-size spec.")
-
-        return chunk_size_spec
 
     def read_variable(self, store, variable):
         with h5py.File(store, driver=self.driver) as f:
@@ -47,7 +30,6 @@ class Hdf5ChunkCollector(Collector):
     def collect(self, resource):
         f = h5py.File(resource, driver=self.driver)
 
-        logging.warning("Collecting from {}".format(resource))
         store = Store(name=resource, size=0)
 
         # global attrs
@@ -67,6 +49,15 @@ class Hdf5ChunkCollector(Collector):
                     value=attrs[attr].decode("utf-8"),
                     store_id=store.id)
                 store.attrs.append(attribute)
+
+        # drs
+        drs = self.parse_drs(resource)
+        for facet in drs:
+            global_attribute = GlobalAttribute(
+                name=facet,
+                value=drs[facet],
+                store_id=store.id)
+            store.attrs.append(global_attribute)
 
         for v in list(f):
             variable = Variable(
@@ -139,17 +130,6 @@ class Hdf5ChunkCollector(Collector):
                         shape=f[v].chunks[i],
                         index=i)
                     dimension.chunk_shapes.append(chunk_shape)
-                elif v in self.chunk_size:
-                    dimension = Dimension(
-                        index=i,
-                        size=f[v].shape[i],
-                        chunk_count=math.ceil(f[v].shape[i] / self.chunk_size[v][i]),
-                        variable_id=variable.id)
-                    chunk_shape = ChunkShape(
-                        dimension_id=dimension.id,
-                        shape=self.chunk_size[v][i],
-                        index=i)
-                    dimension.chunk_shapes.append(chunk_shape)
                 else:
                     dimension = Dimension(
                         index=i,
@@ -181,46 +161,6 @@ class Hdf5ChunkCollector(Collector):
                     variable.scales.append(scale)
 
                 variable.dimensions.append(dimension)
-
-            # chunks
-            dsid = f[v].id
-            if f[v].chunks:
-                for i in range(dsid.get_num_chunks()):
-                    chunk_info = dsid.get_chunk_info(i)
-                    chunk = Chunk(
-                        location=chunk_info.byte_offset,
-                        size=chunk_info.size,
-                        index=i,
-                        variable_id=variable.id)
-                    variable.chunks.append(chunk)
-            elif v in self.chunk_size:
-                logging.warning("Forcing chunks from non chunked variable {} at {}".format(
-                    v,
-                    store))
-                nchunks = math.ceil(f[v].shape[0] / self.chunk_size[v][0])
-                for i in range(nchunks):
-                    chunk = Chunk(
-                        location=dsid.get_offset() + i * self.chunk_size[v][0],
-                        size=self.chunk_size[v][0] * f[v].dtype.itemsize,
-                        index=i,
-                        variable_id=variable.id)
-                    variable.chunks.append(chunk)
-            else:
-                logging.warning("Collecting chunks from non chunked variable {} at {}".format(
-                    v,
-                    store))
-                chunk = Chunk(
-                    location=dsid.get_offset(),
-                    size=dsid.get_storage_size(),
-                    index=0,
-                    variable_id=variable.id)
-                variable.chunks.append(chunk)
-                for i, shape in enumerate(f[v].shape):
-                    chunk_shape = ChunkShape(
-                        dimension_id=variable.dimensions[i].id,
-                        index=chunk.index,
-                        shape=shape)
-                    variable.dimensions[i].chunk_shapes.append(chunk_shape)
 
             store.variables.append(variable)
 

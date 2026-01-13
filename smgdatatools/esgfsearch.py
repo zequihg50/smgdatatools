@@ -5,7 +5,9 @@ import json
 import re
 import sys
 
+import pandas as pd
 import requests
+from natsort import natsort_keygen
 
 INDEX_NODES = (
     "esgf-node.llnl.gov",
@@ -85,9 +87,11 @@ def range_search(endpoint, session, query, stop=None):
                 break
 
 
-def standard_search(query, stop):
+def standard_search(query, stop, index):
     s = requests.Session()
-    endpoint = "https://{}/esg-search/search".format(INDEX_NODES[0])
+    endpoint = "https://{}/esg-search/search".format(index)
+    if index == "esgf-ui.ceda.ac.uk":
+        endpoint = "https://{}/proxy/search".format(index)
     for result in range_search(endpoint, s, query, stop):
         yield result
     s.close()
@@ -106,6 +110,23 @@ def nondistrib_search(query, stop):
         s.close()
 
 
+def fix_result(result):
+    new = dict()
+    keys = result.keys()
+
+    for k in keys:
+        if k == "url":
+            new[k] = result[k]
+        elif isinstance(result[k], list):
+            new[k] = result[k][0]
+        elif isinstance(result[k], str) or isinstance(result[k], float) or isinstance(result[k], int):
+            new[k] = result[k]
+        else:
+            new[k] = str(result[k])
+
+    return new
+
+
 class Formatter():
     def dump(self, item):
         print(json.dumps(item))
@@ -115,67 +136,21 @@ class Formatter():
 
     def fix_instance_id(self, item):
         title = item["title"]
-        title = re.sub("\.nc_[0-9]+$", ".nc", title)
-        title = re.sub("\.nc[0-9]+$", ".nc", title)
+        title = re.sub(r"\.nc_[0-9]+$", ".nc", title)
+        title = re.sub(r"\.nc[0-9]+$", ".nc", title)
         instance_id = item["instance_id"]
-        instance_id = re.sub("\.nc_[0-9]+$", ".nc", instance_id)
-        instance_id = re.sub("\.nc[0-9]+$", ".nc", instance_id)
+        instance_id = re.sub(r"\.nc_[0-9]+$", ".nc", instance_id)
+        instance_id = re.sub(r"\.nc[0-9]+$", ".nc", instance_id)
         if not title in instance_id:
             instance_id = ".".join([instance_id, title])
 
         # fuck cordex
-        #if instance_id.split(".")[0].lower() == "cordex":
+        # if instance_id.split(".")[0].lower() == "cordex":
         #    parts = instance_id.split(".")
         #    parts[7] = "-".join([parts[3], parts[7]])
         #    instance_id = ".".join(parts)
 
         return instance_id
-
-
-class CsvFormatter(Formatter):
-    def __init__(self):
-        self.columns = None
-
-    def dump(self, item):
-        if self.columns is None:
-            self.set_columns_from_item(item)
-            # first line of the csv will be the headers
-            columns = ["\"" + c + "\"" for c in self.columns]
-            print(",".join(columns))
-
-        values = {}
-        for c in self.columns:
-            values[c] = "\"\""
-            if c not in item:
-                continue
-            elif isinstance(item[c], list) and "project" in item and item["project"][0].lower() == "cmip5":
-                values[c] = self.csv_value(",".join(item[c]))
-            elif isinstance(item[c], list):
-                values[c] = self.csv_value(item[c][0])
-            else:
-                values[c] = self.csv_value(str(item[c]))
-
-        if "url" in item:
-            urls = item["url"]
-            for url in urls:
-                parts = url.split("|")
-                endpoint = parts[0]
-                endpoint_type = parts[-1]
-                values[endpoint_type] = self.csv_value(endpoint)
-
-        values["out"] = self.fix_instance_id(item).rstrip(".nc").replace(".", "/") + ".nc"
-
-        row = ",".join([values[column] for column in self.columns])
-        print(row)
-
-    def set_columns_from_item(self, item):
-        self.columns = ["HTTPServer", "GridFTP", "OPENDAP", "out"]
-        for k in item:
-            if k not in self.columns:
-                self.columns.append(k)
-
-    def csv_value(self, value):
-        return "\"" + value.replace("\"", "") + "\""
 
 
 class Aria2cFormatter(Formatter):
@@ -191,8 +166,8 @@ class Aria2cFormatter(Formatter):
         checksum = ""
         checksum_type = ""
         if "checksum" in item and "checksum_type" in item:
-            checksum = item["checksum"][0]
-            checksum_type = item["checksum_type"][0].replace("SHA", "sha-").replace("MD5", "md5")
+            checksum = item["checksum"]
+            checksum_type = item["checksum_type"].replace("SHA", "sha-").replace("MD5", "md5")
 
         if instance_id in self.store:
             self.store[instance_id]["urls"].extend(urls)
@@ -201,7 +176,7 @@ class Aria2cFormatter(Formatter):
                 "urls": urls,
                 "checksum": checksum,
                 "checksum_type": checksum_type,
-                "out": instance_id.rstrip(".nc").replace(".", "/") + ".nc"
+                "out": re.sub(r"\.nc$", "", instance_id).replace(".", "/") + ".nc"
             }
 
     def terminate(self):
@@ -250,47 +225,87 @@ class Metalink4fFormatter(Aria2cFormatter):
         print('</metalink>')
 
 
-class Filter():
-    def __init__(self):
-        self.facets = []
+class Project():
+    # Note that this also removes old versions
+    def first_run(self, df):
+        fcts = self.facets()
+        fcts.remove(self.run_facet())
+        ascending = [True] * len(fcts)
 
-    def filter(self, item):
-        return item
+        # get the first member for each group
+        first_members = (
+            df[self.facets()]
+            .sort_values(by=self.facets(), key=natsort_keygen())
+            .drop_duplicates(fcts, keep="first"))
+
+        # now merge with the original df to get the files for each "first member"
+        first_members = first_members.merge(
+            df,
+            how="inner",
+            on=self.facets())
+
+        return first_members
+
+    def facets(self):
+        raise NotImplementedError
+
+    def run_facet(self):
+        raise NotImplementedError
 
 
-class FacetFilter(Filter):
-    def __init__(self, facets):
-        self.facets = facets
+class Cmip6(Project):
+    def facets(self):
+        return [
+            "mip_era",
+            "activity_id",
+            "institution_id",
+            "source_id",
+            "experiment_id",
+            "variant_label",
+            "table_id",
+            "variable_id",
+            "grid_label",
+        ].copy()
 
-    def filter(self, item):
-        return {k: item[k] for k in self.facets}
+    def run_facet(self):
+        return "variant_label"
 
 
-class Cmip6Filter(FacetFilter):
-    def __init__(self):
-        self.facets = [
-            "project", "activity_id", "source_id", "institution_id", "experiment_id",
-            "member_id", "table_id", "variable_id", "grid_label", "frequency", "realm",
-            "size", "version", "title", "instance_id"
-        ]
-
-
-class CordexFilter(FacetFilter):
-    def __init__(self):
+class Cordex(Project):
+    def facets(self):
         # "product" is excluded because it doesn't exist sometimes
-        self.facets = [
-            "project", "domain", "driving_model", "experiment", "time_frequency",
-            "ensemble", "variable", "rcm_name", "rcm_version", "version", "size",
-            "title", "instance_id"
-        ]
+        return [
+            "project",
+            "product",
+            "domain",
+            "driving_model",
+            "experiment",
+            "time_frequency",
+            "ensemble",
+            "rcm_name",
+            "rcm_version",
+            "variable"
+        ].copy()
+
+    def run_facet(self):
+        return "ensemble"
 
 
-class Cmip5Filter(FacetFilter):
-    def __init__(self):
-        self.facets = [
-            "project", "product", "model", "experiment", "time_frequency", "cmor_table",
-            "variable", "ensemble", "size", "version", "title", "instance_id"
-        ]
+class Cmip5(Project):
+    def facets(self):
+        return [
+            "project",
+            "product",
+            "model",
+            "experiment",
+            "time_frequency",
+            "cmor_table",
+            "ensemble",
+            "variable"
+        ].copy()
+
+    def run_facet(self):
+        return "ensemble"
 
 
 if __name__ == "__main__":
@@ -301,16 +316,16 @@ if __name__ == "__main__":
                         nargs="?",
                         default="json",
                         help="output file format.")
-    parser.add_argument("--filter",
-                        type=str,
-                        nargs="?",
-                        default=None,
-                        help="filter to apply to items.")
     parser.add_argument("--from",
                         type=str,
                         nargs="?",
                         default=None,
                         help="use an existing input file.")
+    parser.add_argument("-i", "--index-node",
+                        type=str,
+                        nargs="?",
+                        default="esgf-ui.ceda.ac.uk",
+                        help="domain of the index node to query.")
     parser.add_argument("-q", "--query",
                         type=str,
                         nargs="?",
@@ -323,6 +338,10 @@ if __name__ == "__main__":
                         type=int,
                         default=None,
                         help="retrieve limited number of items.")
+    parser.add_argument("--first-run",
+                        type=str,
+                        default=None,
+                        help="ESGF project (Cmip6, Cmip5, Cordex).")
     parser.add_argument("selections",
                         type=str,
                         nargs="*",
@@ -332,8 +351,6 @@ if __name__ == "__main__":
 
     if args["format"] == "json":
         formatter = Formatter()
-    elif args["format"] == "csv":
-        formatter = CsvFormatter()
     elif args["format"] == "aria2c":
         formatter = Aria2cFormatter()
     elif args["format"] == "meta4":
@@ -344,45 +361,40 @@ if __name__ == "__main__":
         print("Error: Unknown format '{}', exiting...".format(args["format"]), file=sys.stderr)
         sys.exit(1)
 
-    if args["filter"] is None:
-        filt = Filter()
-    elif args["filter"] == "cmip6":
-        filt = Cmip6Filter()
-    elif args["filter"] == "cordex":
-        filt = CordexFilter()
-    elif args["filter"] == "cmip5":
-        filt = Cmip5Filter()
-    else:  # if not recognized, use facets separated by ,
-        facets = args["filter"].split(",")
-        filt = FacetFilter(facets)
-
     # just convert and exit
     if args["from"] is not None:
-        with open(args["from"], "r") as f:
-            for result in f:
-                formatter.dump(filt.filter(json.loads(result)))
-        # for formatters that store in memory
-        formatter.terminate()
+        if args["first_run"]:
+            project: Project = globals()[args["first_run"]]()
+            df = pd.read_json(args["from"], lines=True)
+            df = project.first_run(df)
+            df.to_json(sys.stdout, orient="records", lines=True)
+        else:
+            with open(args["from"], "r") as f:
+                for result in f:
+                    formatter.dump(json.loads(result))
+
+            # for formatters that store in memory
+            formatter.terminate()
         sys.exit(0)
 
     # search query
     if args["query"]:
         if args["local"]:
             for result in nondistrib_search(parse_query(args["query"]), args["stop"]):
-                formatter.dump(filt.filter(result))
+                formatter.dump(fix_result(result))
         else:
-            for result in standard_search(parse_query(args["query"]), args["stop"]):
-                formatter.dump(filt.filter(result))
+            for result in standard_search(parse_query(args["query"]), args["stop"], args["index_node"]):
+                formatter.dump(fix_result(result))
 
     # search selections
     for selection in args["selections"]:
         for query in parse_selection(selection):
             if args["local"]:
                 for result in nondistrib_search(query, args["stop"]):
-                    formatter.dump(filt.filter(result))
+                    formatter.dump(fix_result(result))
             else:
-                for result in standard_search(query, args["stop"]):
-                    formatter.dump(filt.filter(result))
+                for result in standard_search(query, args["stop"], args["index_node"]):
+                    formatter.dump(fix_result(result))
 
     # for formatters that store in memory
     formatter.terminate()

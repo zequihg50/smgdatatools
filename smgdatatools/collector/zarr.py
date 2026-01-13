@@ -43,8 +43,7 @@ class ZarrCollector(Collector):
             # compressor
             if f[v].compressor:
                 comp_config = f[v].compressor.get_config()
-                comp = Compressor(
-                    name=comp_config["id"])
+                comp = Compressor()
                 for k in comp_config:
                     if k != "id":
                         comp.properties.append(CompressorProperty(

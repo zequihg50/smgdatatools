@@ -1,11 +1,9 @@
 import os
-
+import logging
 import netCDF4
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
 from smgdatatools.collector.lib import Collector
-from smgdatatools.model.model import Base, Store, Variable, Dimension, GlobalAttribute, Attribute, Scale
+from smgdatatools.model.model import Store, Variable, Dimension, GlobalAttribute, Attribute, Scale
 
 
 class NcCollector(Collector):
@@ -30,8 +28,9 @@ class NcCollector(Collector):
         store = Store(name=resource)
 
         if os.path.isfile(resource):
-            store.size=os.stat(resource).st_size
+            store.size = os.stat(resource).st_size
 
+        logging.warning("Collecting from {}".format(store))
         f = netCDF4.Dataset(resource)
 
         # global attributes

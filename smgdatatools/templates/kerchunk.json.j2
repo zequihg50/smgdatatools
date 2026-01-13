@@ -1,0 +1,40 @@
+{
+    ".zgroup": "{\"zarr_format\": 2}",
+
+    {% set variables = stores|map("attr", "variables")|sum(start=[])|unique(attribute="name")|sort(attribute="name")|list %}
+    {% for v in variables %}
+    {% if v.dtype == "|O" %}
+    {% set values = collector.read_variable(v.store.name, v.name)|list|to_numpy %}
+    "{{ v.name }}/.zarray": "{\"chunks\":{{ values.shape|list }},\"compressor\":null,\"dtype\":\"{{ values.dtype }}\",\"fill_value\":null,\"filters\":[],\"order\":\"C\",\"shape\":{{ values.shape|list }},\"zarr_format\":2}",
+    "{{ v.name }}/.zattrs": "{\"_ARRAY_DIMENSIONS\":[\"variant_label\"],\"standard_name\":\"realization\",\"_CoordinateAxisType\":\"Ensemble\"}",
+    {% else %}
+    {% set shape = v.dimensions|map("attr", "size")|list %}
+    {% set chunks = v.dimensions|map("attr", "chunk_shapes")|sum(start=[])|sort(attribute="index")|map("attr", "shape")|list %}
+    {% set attributes = collector.read_attributes(v.store.name, v.name) %}
+    {% set scales = ",".join(v.scales|map("attr", "name")|map("regex_replace", "^", "\\\"")|map("regex_replace", "$", "\\\"")) %}
+    {% set fletchers = v.filters|map("attr", "properties")|sum(start=[])|selectattr("name", "eq", "id")|selectattr("value", "eq", "fletcher32")|map("attr", "filter_id")|unique|list %}
+    {% set filters = v.filters|rejectattr("id", "in", fletchers)|list %}
+    "{{ v.name }}/.zarray": "{\"chunks\":{{ chunks }},\"compressor\":{% if v.compressor %}{{ "{" + (v.compressor.properties|attrs_dict).items()|attrs_escape|join(",")|replace("gzip", "zlib") + "}" }}{% else %}null{% endif %},\"dtype\":\"{{ v.dtype }}\",\"fill_value\":{{ v.fill_value|default("null", true) }},\"filters\":[{% for f in filters %}{{ "{" + (f.properties|attrs_dict).items()|attrs_escape|join(",") + "}" }}{% if loop.index < filters|length %},{% endif %}{% endfor %}],\"order\":\"C\",\"shape\":{{ shape }},\"zarr_format\":2}",
+    {% if attributes %}
+    "{{ v.name }}/.zattrs": "{\"_ARRAY_DIMENSIONS\":[{{ scales }}],{{ attributes.items()|attrs_escape|join(", ") }}}",
+    {% else %}
+    "{{ v.name }}/.zattrs": "{\"_ARRAY_DIMENSIONS\":[{{ scales }}]}",
+    {% endif %}
+    {% endif %}
+    {% endfor %}
+
+    {% for v in variables %}
+    {% if v.dtype == "|O" %}
+    "{{ v.name }}/0": "base64:{{ (collector.read_variable(v.store.name, v.name)|list|to_numpy|b64encode).decode("ascii") }}",
+    {% else %}
+    {% for c in v.chunks %}
+    {% set fletcher32 = v.filters|map("attr", "properties")|sum(start=[])|selectattr("value", "eq", "fletcher32")|list|length > 0 %}
+    "{{ v.name }}/{{ v|calculate_chunk_idx(c.index)|map("string")|join(".") }}": [
+        "{{ v.store.name }}", {{ c.location }}, {% if fletcher32 %}{{ c.size - 4 }}{% else %}{{ c.size }}{% endif %}
+
+    ]{% if not (v.name == variables[-1].name and loop.index == loop.length) %},{% endif %}
+
+    {% endfor %}
+    {% endif %}
+    {% endfor %}
+}

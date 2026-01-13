@@ -17,8 +17,8 @@
                 <netcdf location="{{ store.name }}" ncoords="{{ store.variables|selectattr('name', 'eq', agg_dim_name)|first|attr('dimensions')|selectattr('index', 'eq', 0)|first|attr('size') }}">
                     {% if time_attrs["units"] != reference_attrs["units"] or time_attrs["calendar"] != reference_attrs["calendar"] %}
                     <variable name="{{ time.name }}">
-                        <attribute name="units" value="{{ time_attrs['units'] }}"/>
-                        <attribute name="calendar" value="{{ time_attrs['calendar'] }}"/>
+                        <attribute name="units" value="{{ reference_attrs['units'] }}"/>
+                        <attribute name="calendar" value="{{ reference_attrs['calendar'] }}"/>
                         <values>{{ collector.read_variable(store.name, agg_dim_name)|convert_times(time_attrs["units"], time_attrs["calendar"], reference_attrs["units"], reference_attrs["calendar"])|list|map("string")|join(" ") }}</values>
                     </variable>
                     {% endif %}
