@@ -1,5 +1,6 @@
 import sys
 import argparse
+import math
 
 import numpy as np
 from mpi4py import MPI
@@ -320,6 +321,24 @@ if __name__ == "__main__":
                 with netCDF4.Dataset(fs[j]) as src:
                     frm = counts_sum[j]
                     to  = counts_sum[j+1]
-                    ncv[frm:to] = src[v][...]
+                    #ncv[frm:to] = src[v][...]
+                    TAMANIO = 500
+                    local_iters = math.ceil((to - frm) / TAMANIO)
+                    max_iters = comm.allreduce(local_iters, op=MPI.MAX)
+                    frm_k = frm
+                    to_k = min(frm_k + TAMANIO, to)
+                    max_k = 0
+                    for k in range(max_iters): # esto lo q hace es escribir sin parar en la misma region para dar el mismo numero de iteraciones
+                        #print(f"(rank {rank}: Write chunk {frm_k}-{to_k} from file {fs[j]} (max_iters={max_iters}, local_iters={local_iters}, k={k}, frm_k={frm_k}, to_k={to_k}).", flush=True)
+                        try:
+                            ncv[frm_k:to_k] = src[v][TAMANIO*max_k:min(TAMANIO*(max_k+1), src[v].shape[0])]
+                        except:
+                            #print(f"exception: rank {rank}", flush=True)
+                            raise
+                        #print(f"(rank {rank}: Done chunk {frm_k}-{to_k} from file {fs[j]}.", flush=True)
+                        if k < local_iters-1:
+                            frm_k += TAMANIO
+                            to_k = min(to_k + TAMANIO, to)
+                            max_k += 1
+    comm.Barrier()
     dst.close()
-
